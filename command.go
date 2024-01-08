@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,19 @@ type Message struct {
 	Key   []byte
 	Value []byte
 	TTL   time.Duration
+}
+
+func (m *Message) ToBytes() []byte {
+	switch m.Cmd {
+	case CMDSet:
+		cmd := fmt.Sprintf("%s %s %s %d", m.Cmd, m.Key, m.Value, m.TTL)
+		return []byte(cmd)
+	case CMDGet:
+		cmd := fmt.Sprintf("%s %s", m.Cmd, m.Key)
+		return []byte(cmd)
+	default:
+		panic("unknown command")
+	}
 }
 
 func parseCommand(raw []byte) (*Message, error) {

@@ -18,12 +18,14 @@ type ServerOpts struct {
 
 type Server struct {
 	ServerOpts
-	cache cache.Cacher
+	followers map[net.Conn]struct{}
+	cache     cache.Cacher
 }
 
 func NewServer(opts ServerOpts, c cache.Cacher) *Server {
 	return &Server{
 		ServerOpts: opts,
+		followers:  make(map[net.Conn]struct{}),
 		cache:      c,
 	}
 }
@@ -36,6 +38,18 @@ func (s *Server) Start() error {
 
 	slog.Info("server starting on ", "port", s.ListenAddr)
 
+	if !s.IsLeader {
+		go func() {
+			conn, err := net.Dial("tcp", s.LeaderAddr)
+			if err != nil {
+				slog.Error("Error occured while connectiing to leader", "err", err)
+				return
+			}
+			slog.Info("connection made with leader", "leader", s.LeaderAddr)
+			s.handleConn(conn)
+		}()
+	}
+
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -47,11 +61,14 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) handleConn(conn net.Conn) {
-	defer func() {
-		conn.Close()
-	}()
-
+	defer conn.Close()
 	buf := make([]byte, 2048)
+
+	slog.Info("connection made", "conn", conn.RemoteAddr())
+
+	if s.IsLeader {
+		s.followers[conn] = struct{}{}
+	}
 
 	for {
 		n, err := conn.Read(buf)
@@ -152,5 +169,12 @@ func (s *Server) handleDeleteCmd(conn net.Conn, msg *Message) ([]byte, error) {
 }
 
 func (s *Server) sendToFollowers(ctx context.Context, msg *Message) error {
+	for conn := range s.followers {
+		_, err := conn.Write(msg.ToBytes())
+		if err != nil {
+			slog.Info("write to follower", "err", err)
+			continue
+		}
+	}
 	return nil
 }
