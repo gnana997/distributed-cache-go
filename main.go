@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"flag"
 	"fmt"
 	"gnana997/distributed-cache/cache"
 	"gnana997/distributed-cache/client"
+	"io"
 	"log"
 	"time"
 )
@@ -27,23 +29,32 @@ func main() {
 
 	go func() {
 		time.Sleep(2 * time.Second)
-		client, err := client.NewCLient(":3000", client.Options{})
-		if err != nil {
-			log.Fatal(err)
+		for i := 0; i < 1000; i++ {
+			go func() {
+				client, err := client.NewCLient(":3000", client.Options{})
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				var (
+					key   = randomBytes(10)
+					value = randomBytes(10)
+				)
+
+				SendCommand(client, key, value)
+				time.Sleep(20 * time.Millisecond)
+
+				val, err := GetCommand(client, key)
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				fmt.Println(string(val))
+
+				client.Close()
+				time.Sleep(2 * time.Second)
+			}()
 		}
-
-		SendCommand(client)
-		time.Sleep(2000 * time.Millisecond)
-
-		val, err := GetCommand(client)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		fmt.Println(string(val))
-
-		client.Close()
-		time.Sleep(2 * time.Second)
 	}()
 
 	server := NewServer(opts, cache.NewCache())
@@ -51,17 +62,23 @@ func main() {
 	server.Start()
 }
 
-func SendCommand(c *client.Client) {
+func randomBytes(n int) []byte {
+	buf := make([]byte, n)
+	io.ReadFull(rand.Reader, buf)
+	return buf
+}
 
-	err := c.Set(context.Background(), []byte("gg"), []byte("gnana997"), 0)
+func SendCommand(c *client.Client, key, value []byte) {
+
+	err := c.Set(context.Background(), key, value, 0)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func GetCommand(c *client.Client) ([]byte, error) {
+func GetCommand(c *client.Client, key []byte) ([]byte, error) {
 
-	val, err := c.Get(context.Background(), []byte("gg"))
+	val, err := c.Get(context.Background(), key)
 	if err != nil {
 		return nil, err
 	}
