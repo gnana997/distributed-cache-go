@@ -35,10 +35,12 @@ func (c *Cache) Set(key []byte, val []byte, ttl time.Duration) error {
 
 	c.data[string(key)] = val
 
-	go func() {
-		<-time.After(ttl * time.Second)
-		delete(c.data, string(key))
-	}()
+	if ttl > 0 {
+		go func() {
+			<-time.After(ttl)
+			delete(c.data, string(key))
+		}()
+	}
 
 	return nil
 }

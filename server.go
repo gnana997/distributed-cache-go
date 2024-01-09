@@ -1,13 +1,14 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"gnana997/distributed-cache/cache"
+	"gnana997/distributed-cache/proto"
 	"io"
+	"log"
 	"log/slog"
 	"net"
-	"strconv"
+	"time"
 )
 
 type ServerOpts struct {
@@ -18,14 +19,12 @@ type ServerOpts struct {
 
 type Server struct {
 	ServerOpts
-	followers map[net.Conn]struct{}
-	cache     cache.Cacher
+	cache cache.Cacher
 }
 
 func NewServer(opts ServerOpts, c cache.Cacher) *Server {
 	return &Server{
 		ServerOpts: opts,
-		followers:  make(map[net.Conn]struct{}),
 		cache:      c,
 	}
 }
@@ -37,18 +36,6 @@ func (s *Server) Start() error {
 	}
 
 	slog.Info("server starting on ", "port", s.ListenAddr)
-
-	if !s.IsLeader {
-		go func() {
-			conn, err := net.Dial("tcp", s.LeaderAddr)
-			if err != nil {
-				slog.Error("Error occured while connectiing to leader", "err", err)
-				return
-			}
-			slog.Info("connection made with leader", "leader", s.LeaderAddr)
-			s.handleConn(conn)
-		}()
-	}
 
 	for {
 		conn, err := ln.Accept()
@@ -62,119 +49,36 @@ func (s *Server) Start() error {
 
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
-	buf := make([]byte, 2048)
+	// buf := make([]byte, 2048)
 
 	slog.Info("connection made", "conn", conn.RemoteAddr())
 
-	if s.IsLeader {
-		s.followers[conn] = struct{}{}
-	}
-
 	for {
-		n, err := conn.Read(buf)
+		cmd, err := proto.ParseCommand(conn)
 		if err != nil {
-			slog.Error("read error: %v", err)
-			break
-		}
-
-		slog.Info("received message: ", "msg", string(buf[:n]))
-
-		val, err := s.handleMessage(conn, buf[:n])
-
-		if err != nil {
-			slog.Error("handle message error: %v", err)
-			_, err = conn.Write([]byte(err.Error()))
-			if err != nil {
-				if err == io.EOF {
-					slog.Info("client disconnected")
-					break
-				}
-				slog.Error("write error: %v", err)
-				conn.Close()
-			}
-		}
-
-		_, err = conn.Write(val)
-		if err != nil {
-			slog.Error("write error: %v", err)
 			if err == io.EOF {
-				slog.Info("client disconnected")
+				slog.Info("Connection Closed", "conn", conn.RemoteAddr())
 				break
 			}
-			slog.Error("write error: %v", err)
-			conn.Close()
+			log.Println("parse command error")
+			break
 		}
+		go s.handleMessage(conn, cmd)
 	}
-
 }
 
-func (s *Server) handleMessage(conn net.Conn, msg []byte) ([]byte, error) {
-	var err error
-	payload, err := parseCommand(msg)
-
-	if err != nil {
-		slog.Error("parse command error: %v", err)
-		return nil, err
+func (s *Server) handleMessage(conn net.Conn, msg any) {
+	switch v := msg.(type) {
+	case *proto.SetCommand:
+		s.handleSetCommand(conn, v)
+	case *proto.GetCommand:
 	}
-
-	var val []byte
-	switch payload.Cmd {
-	case CMDSet:
-		err = s.handleSetCmd(conn, payload)
-	case CMDGet:
-		val, err = s.handleGetCmd(conn, payload)
-	case CMDHas:
-		val, err = s.handleHasCmd(conn, payload)
-	case CMDDelete:
-		val, err = s.handleDeleteCmd(conn, payload)
-	}
-
-	if err != nil {
-		slog.Error("handle command error: %v", err)
-		conn.Write([]byte(err.Error()))
-		return nil, err
-	}
-
-	return val, nil
 }
 
-func (s *Server) handleSetCmd(conn net.Conn, msg *Message) error {
-	if err := s.cache.Set(msg.Key, msg.Value, msg.TTL); err != nil {
+func (s *Server) handleSetCommand(conn net.Conn, cmd *proto.SetCommand) error {
+	slog.Info("Set command", "Key", cmd.Key, "value", cmd.Value, "ttl", cmd.TTL)
+	if err := s.cache.Set(cmd.Key, cmd.Value, time.Duration(cmd.TTL)); err != nil {
 		return err
-	}
-
-	go s.sendToFollowers(context.TODO(), msg)
-
-	return nil
-}
-
-func (s *Server) handleGetCmd(conn net.Conn, msg *Message) ([]byte, error) {
-	val, err := s.cache.Get(msg.Key)
-	if err != nil {
-		return nil, err
-	}
-	return val, nil
-}
-
-func (s *Server) handleHasCmd(conn net.Conn, msg *Message) ([]byte, error) {
-	val := []byte(strconv.FormatBool(s.cache.Has(msg.Key)))
-	return val, nil
-}
-
-func (s *Server) handleDeleteCmd(conn net.Conn, msg *Message) ([]byte, error) {
-	if err := s.cache.Delete(msg.Key); err != nil {
-		return nil, err
-	}
-	return []byte(fmt.Sprintf("Deleted Key %s", msg.Key)), nil
-}
-
-func (s *Server) sendToFollowers(ctx context.Context, msg *Message) error {
-	for conn := range s.followers {
-		_, err := conn.Write(msg.ToBytes())
-		if err != nil {
-			slog.Info("write to follower", "err", err)
-			continue
-		}
 	}
 	return nil
 }

@@ -6,3 +6,6 @@ runfollower: build
 
 build:
 	go build -o bin/cache
+
+test:
+	go test -v ./...
