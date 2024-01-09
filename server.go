@@ -51,13 +51,13 @@ func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
 	// buf := make([]byte, 2048)
 
-	slog.Info("connection made", "conn", conn.RemoteAddr())
+	// slog.Info("connection made", "conn", conn.RemoteAddr())
 
 	for {
 		cmd, err := proto.ParseCommand(conn)
 		if err != nil {
 			if err == io.EOF {
-				slog.Info("Connection Closed", "conn", conn.RemoteAddr())
+				// slog.Info("Connection Closed", "conn", conn.RemoteAddr())
 				break
 			}
 			log.Println("parse command error")
@@ -78,7 +78,7 @@ func (s *Server) handleMessage(conn net.Conn, msg any) {
 
 func (s *Server) handleSetCommand(conn net.Conn, cmd *proto.SetCommand) error {
 
-	slog.Info("Set command", "Key", cmd.Key, "value", cmd.Value, "ttl", cmd.TTL)
+	// slog.Info("Set command", "Key", cmd.Key, "value", cmd.Value, "ttl", cmd.TTL)
 
 	resp := proto.SetResponse{}
 	if err := s.cache.Set(cmd.Key, cmd.Value, time.Duration(cmd.TTL)); err != nil {
@@ -94,8 +94,6 @@ func (s *Server) handleSetCommand(conn net.Conn, cmd *proto.SetCommand) error {
 }
 
 func (s *Server) handleGetCommand(conn net.Conn, cmd *proto.GetCommand) error {
-
-	slog.Info("Get command", "Key", cmd.Key)
 
 	resp := proto.GetResponse{}
 	val, err := s.cache.Get(cmd.Key)

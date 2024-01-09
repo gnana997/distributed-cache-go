@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"flag"
 	"fmt"
 	"gnana997/distributed-cache/cache"
 	"gnana997/distributed-cache/client"
-	"io"
 	"log"
 	"time"
 )
@@ -29,20 +27,20 @@ func main() {
 
 	go func() {
 		time.Sleep(2 * time.Second)
-		for i := 0; i < 1000; i++ {
-			go func() {
+		for i := 0; i < 100; i++ {
+			go func(i int) {
 				client, err := client.NewCLient(":3000", client.Options{})
 				if err != nil {
 					log.Fatal(err)
 				}
 
 				var (
-					key   = randomBytes(10)
-					value = randomBytes(10)
+					key   = []byte(fmt.Sprintf("key_%d", i))
+					value = []byte(fmt.Sprintf("val_%d", i))
 				)
 
 				SendCommand(client, key, value)
-				time.Sleep(20 * time.Millisecond)
+				time.Sleep(200 * time.Millisecond)
 
 				val, err := GetCommand(client, key)
 				if err != nil {
@@ -52,8 +50,7 @@ func main() {
 				fmt.Println(string(val))
 
 				client.Close()
-				time.Sleep(2 * time.Second)
-			}()
+			}(i)
 		}
 	}()
 
@@ -62,11 +59,11 @@ func main() {
 	server.Start()
 }
 
-func randomBytes(n int) []byte {
-	buf := make([]byte, n)
-	io.ReadFull(rand.Reader, buf)
-	return buf
-}
+// func randomBytes(n int) []byte {
+// 	buf := make([]byte, n)
+// 	io.ReadFull(rand.Reader, buf)
+// 	return buf
+// }
 
 func SendCommand(c *client.Client, key, value []byte) {
 

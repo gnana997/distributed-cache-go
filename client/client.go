@@ -37,7 +37,7 @@ func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("%+v\n", resp)
+	// fmt.Printf("%+v\n", resp)
 	if resp.Status == proto.StatusKeyNotFound {
 		return nil, fmt.Errorf("could not find key (%s)", string(key))
 	}
@@ -63,7 +63,7 @@ func (c *Client) Set(ctx context.Context, key, value []byte, ttl int) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%+v\n", resp)
+	// fmt.Printf("%+v\n", resp)
 	if resp.Status != proto.StatusOK {
 		return fmt.Errorf("server responded with non OK status [%s]", resp.Status)
 	}
