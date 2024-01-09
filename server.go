@@ -72,13 +72,42 @@ func (s *Server) handleMessage(conn net.Conn, msg any) {
 	case *proto.SetCommand:
 		s.handleSetCommand(conn, v)
 	case *proto.GetCommand:
+		s.handleGetCommand(conn, v)
 	}
 }
 
 func (s *Server) handleSetCommand(conn net.Conn, cmd *proto.SetCommand) error {
+
 	slog.Info("Set command", "Key", cmd.Key, "value", cmd.Value, "ttl", cmd.TTL)
+
+	resp := proto.SetResponse{}
 	if err := s.cache.Set(cmd.Key, cmd.Value, time.Duration(cmd.TTL)); err != nil {
+		resp.Status = proto.StatusError
+		_, err := conn.Write(resp.Bytes())
 		return err
 	}
-	return nil
+
+	resp.Status = proto.StatusOK
+	_, err := conn.Write(resp.Bytes())
+
+	return err
+}
+
+func (s *Server) handleGetCommand(conn net.Conn, cmd *proto.GetCommand) error {
+
+	slog.Info("Get command", "Key", cmd.Key)
+
+	resp := proto.GetResponse{}
+	val, err := s.cache.Get(cmd.Key)
+	if err != nil {
+		resp.Status = proto.StatusError
+		_, err := conn.Write(resp.Bytes())
+		return err
+	}
+
+	resp.Status = proto.StatusOK
+	resp.Value = val
+	_, err = conn.Write(resp.Bytes())
+
+	return err
 }

@@ -7,6 +7,28 @@ import (
 	"io"
 )
 
+type Status byte
+
+func (s Status) String() string {
+	switch s {
+	case StatusError:
+		return "ERR"
+	case StatusOK:
+		return "OK"
+	case StatusKeyNotFound:
+		return "KEYNOTFOUND"
+	default:
+		return "NONE"
+	}
+}
+
+const (
+	StatusNone Status = iota
+	StatusOK
+	StatusError
+	StatusKeyNotFound
+)
+
 type Command byte
 
 const (
@@ -15,6 +37,54 @@ const (
 	CMDGet
 	CMDDel
 )
+
+type SetResponse struct {
+	Status Status
+}
+
+func (r SetResponse) Bytes() []byte {
+	buf := new(bytes.Buffer)
+	binary.Write(buf, binary.LittleEndian, r.Status)
+
+	return buf.Bytes()
+}
+
+func ParseSetResponse(r io.Reader) (*SetResponse, error) {
+	resp := &SetResponse{}
+
+	err := binary.Read(r, binary.LittleEndian, &resp.Status)
+
+	return resp, err
+}
+
+type GetResponse struct {
+	Status Status
+	Value  []byte
+}
+
+func (r *GetResponse) Bytes() []byte {
+	buf := new(bytes.Buffer)
+	binary.Write(buf, binary.LittleEndian, r.Status)
+
+	valueLen := int32(len(r.Value))
+	binary.Write(buf, binary.LittleEndian, valueLen)
+	binary.Write(buf, binary.LittleEndian, r.Value)
+
+	return buf.Bytes()
+}
+
+func ParseGetResponse(r io.Reader) (*GetResponse, error) {
+	resp := &GetResponse{}
+
+	binary.Read(r, binary.LittleEndian, &resp.Status)
+
+	var valueLen int32
+	binary.Read(r, binary.LittleEndian, &valueLen)
+	resp.Value = make([]byte, valueLen)
+	binary.Read(r, binary.LittleEndian, &resp.Value)
+
+	return resp, nil
+}
 
 type SetCommand struct {
 	Key   []byte
