@@ -5,11 +5,50 @@ import (
 	"fmt"
 	"gnana997/distributed-cache/client"
 	"log"
+	"net"
+	"os"
 	"time"
+
+	"github.com/hashicorp/raft"
 )
 
+type Server struct {
+	raft *raft.Raft
+}
+
 func main() {
-	TestClient()
+	var (
+		cfg            = raft.DefaultConfig()
+		fsm            = &raft.MockFSM{}
+		logStore       = raft.NewInmemStore()
+		snapshoteStore = raft.NewInmemSnapshotStore()
+		stableStore    = raft.NewInmemStore()
+		timeout        = time.Second * 5
+	)
+
+	cfg.LocalID = "gn"
+
+	ips, err := net.LookupIP("localhost")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(ips) == 0 {
+		log.Fatalf("localhost did not resolve to any IPs")
+	}
+	addr := &net.TCPAddr{IP: ips[0], Port: 4000}
+
+	tr, err := raft.NewTCPTransport(":4000", addr, 10, timeout, os.Stdout)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	r, err := raft.NewRaft(cfg, fsm, logStore, stableStore, snapshoteStore, tr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%+v\n", r)
+
+	select {}
 }
 
 func TestClient() {
