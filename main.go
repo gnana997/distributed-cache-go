@@ -25,38 +25,44 @@ func main() {
 		LeaderAddr: *leaderAddr,
 	}
 
-	go func() {
-		time.Sleep(2 * time.Second)
-		for i := 0; i < 100; i++ {
-			go func(i int) {
-				client, err := client.NewCLient(":3000", client.Options{})
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				var (
-					key   = []byte(fmt.Sprintf("key_%d", i))
-					value = []byte(fmt.Sprintf("val_%d", i))
-				)
-
-				SendCommand(client, key, value)
-				time.Sleep(200 * time.Millisecond)
-
-				val, err := GetCommand(client, key)
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				fmt.Println(string(val))
-
-				client.Close()
-			}(i)
-		}
-	}()
+	if opts.IsLeader {
+		go func() {
+			time.Sleep(10 * time.Second)
+			TestClient()
+		}()
+	}
 
 	server := NewServer(opts, cache.NewCache())
 
 	server.Start()
+}
+
+func TestClient() {
+	for i := 0; i < 100; i++ {
+		go func(i int) {
+			client, err := client.NewCLient(":3000", client.Options{})
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			var (
+				key   = []byte(fmt.Sprintf("key_%d", i))
+				value = []byte(fmt.Sprintf("val_%d", i))
+			)
+
+			SendCommand(client, key, value)
+			time.Sleep(200 * time.Millisecond)
+
+			val, err := GetCommand(client, key)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fmt.Println(string(val))
+
+			client.Close()
+		}(i)
+	}
 }
 
 // func randomBytes(n int) []byte {

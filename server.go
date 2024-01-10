@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
+	"encoding/binary"
 	"fmt"
 	"gnana997/distributed-cache/cache"
+	"gnana997/distributed-cache/client"
 	"gnana997/distributed-cache/proto"
 	"io"
 	"log"
@@ -19,12 +22,14 @@ type ServerOpts struct {
 
 type Server struct {
 	ServerOpts
-	cache cache.Cacher
+	followers map[*client.Client]struct{}
+	cache     cache.Cacher
 }
 
 func NewServer(opts ServerOpts, c cache.Cacher) *Server {
 	return &Server{
 		ServerOpts: opts,
+		followers:  make(map[*client.Client]struct{}),
 		cache:      c,
 	}
 }
@@ -33,6 +38,14 @@ func (s *Server) Start() error {
 	ln, err := net.Listen("tcp", s.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("listen error: %v", err)
+	}
+
+	if !s.IsLeader && len(s.LeaderAddr) != 0 {
+		go func() {
+			if err := s.dialLeader(); err != nil {
+				log.Println(err)
+			}
+		}()
 	}
 
 	slog.Info("server starting on ", "port", s.ListenAddr)
@@ -45,6 +58,20 @@ func (s *Server) Start() error {
 		}
 		go s.handleConn(conn)
 	}
+}
+
+func (s *Server) dialLeader() error {
+	conn, err := net.Dial("tcp", s.LeaderAddr)
+	if err != nil {
+		return fmt.Errorf("failed to dial leader: %s", s.LeaderAddr)
+	}
+	slog.Info("connected to leader", "leaderAddr", s.LeaderAddr)
+
+	binary.Write(conn, binary.LittleEndian, proto.CMDJoin)
+
+	s.handleConn(conn)
+
+	return nil
 }
 
 func (s *Server) handleConn(conn net.Conn) {
@@ -73,12 +100,32 @@ func (s *Server) handleMessage(conn net.Conn, msg any) {
 		s.handleSetCommand(conn, v)
 	case *proto.GetCommand:
 		s.handleGetCommand(conn, v)
+	case *proto.JoinCommand:
+		s.handleJoinCommand(conn, v)
 	}
+}
+
+func (s *Server) handleJoinCommand(conn net.Conn, cmd *proto.JoinCommand) error {
+	fmt.Println("member just joined the cluster", conn.RemoteAddr())
+	s.followers[client.NewFromConn(conn)] = struct{}{}
+	return nil
 }
 
 func (s *Server) handleSetCommand(conn net.Conn, cmd *proto.SetCommand) error {
 
-	// slog.Info("Set command", "Key", cmd.Key, "value", cmd.Value, "ttl", cmd.TTL)
+	slog.Info("Set command", "Key", cmd.Key, "value", cmd.Value, "ttl", cmd.TTL)
+
+	if s.IsLeader {
+		go func() {
+			for follower := range s.followers {
+				if err := follower.Set(context.TODO(), cmd.Key, cmd.Value, cmd.TTL); err != nil {
+					if err != nil {
+						slog.Error("forward to member error", "err", err)
+					}
+				}
+			}
+		}()
+	}
 
 	resp := proto.SetResponse{}
 	if err := s.cache.Set(cmd.Key, cmd.Value, time.Duration(cmd.TTL)); err != nil {

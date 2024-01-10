@@ -36,6 +36,7 @@ const (
 	CMDSet
 	CMDGet
 	CMDDel
+	CMDJoin
 )
 
 type SetResponse struct {
@@ -86,6 +87,8 @@ func ParseGetResponse(r io.Reader) (*GetResponse, error) {
 	return resp, nil
 }
 
+type JoinCommand struct{}
+
 type SetCommand struct {
 	Key   []byte
 	Value []byte
@@ -133,6 +136,8 @@ func ParseCommand(r io.Reader) (any, error) {
 		return parseSetCommand(r), nil
 	case CMDGet:
 		return parseGetCommand(r), nil
+	case CMDJoin:
+		return &JoinCommand{}, nil
 	default:
 		return nil, fmt.Errorf("invalid command")
 	}
