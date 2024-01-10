@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"net"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 type ServerOpts struct {
@@ -24,13 +26,16 @@ type Server struct {
 	ServerOpts
 	followers map[*client.Client]struct{}
 	cache     cache.Cacher
+	logger    *zap.SugaredLogger
 }
 
 func NewServer(opts ServerOpts, c cache.Cacher) *Server {
+	l, _ := zap.NewProduction()
 	return &Server{
 		ServerOpts: opts,
 		followers:  make(map[*client.Client]struct{}),
 		cache:      c,
+		logger:     l.Sugar(),
 	}
 }
 
@@ -48,7 +53,7 @@ func (s *Server) Start() error {
 		}()
 	}
 
-	slog.Info("server starting on ", "port", s.ListenAddr)
+	s.logger.Info("server starting", "addr", s.ListenAddr, "leader", s.IsLeader)
 
 	for {
 		conn, err := ln.Accept()
@@ -65,7 +70,7 @@ func (s *Server) dialLeader() error {
 	if err != nil {
 		return fmt.Errorf("failed to dial leader: %s", s.LeaderAddr)
 	}
-	slog.Info("connected to leader", "leaderAddr", s.LeaderAddr)
+	s.logger.Info("connected to leader", "leaderAddr", s.LeaderAddr)
 
 	binary.Write(conn, binary.LittleEndian, proto.CMDJoin)
 
@@ -106,14 +111,14 @@ func (s *Server) handleMessage(conn net.Conn, msg any) {
 }
 
 func (s *Server) handleJoinCommand(conn net.Conn, cmd *proto.JoinCommand) error {
-	fmt.Println("member just joined the cluster", conn.RemoteAddr())
+	s.logger.Info("member just joined the cluster", conn.RemoteAddr())
 	s.followers[client.NewFromConn(conn)] = struct{}{}
 	return nil
 }
 
 func (s *Server) handleSetCommand(conn net.Conn, cmd *proto.SetCommand) error {
 
-	slog.Info("Set command", "Key", cmd.Key, "value", cmd.Value, "ttl", cmd.TTL)
+	s.logger.Info("Set command", "Key", string(cmd.Key), "value", string(cmd.Value), "ttl", cmd.TTL)
 
 	if s.IsLeader {
 		go func() {
@@ -141,6 +146,8 @@ func (s *Server) handleSetCommand(conn net.Conn, cmd *proto.SetCommand) error {
 }
 
 func (s *Server) handleGetCommand(conn net.Conn, cmd *proto.GetCommand) error {
+
+	s.logger.Info("Set command", "Key", string(cmd.Key))
 
 	resp := proto.GetResponse{}
 	val, err := s.cache.Get(cmd.Key)
