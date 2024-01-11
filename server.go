@@ -6,13 +6,18 @@ import (
 	"fmt"
 	"gnana997/distributed-cache/cache"
 	"gnana997/distributed-cache/client"
+	"gnana997/distributed-cache/fsm"
 	"gnana997/distributed-cache/proto"
 	"io"
 	"log"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/hashicorp/raft"
+	raftboltdb "github.com/hashicorp/raft-boltdb"
 	"go.uber.org/zap"
 )
 
@@ -20,6 +25,7 @@ type ServerOpts struct {
 	ListenAddr string
 	IsLeader   bool
 	LeaderAddr string
+	RaftDir    string
 }
 
 type Server struct {
@@ -27,15 +33,60 @@ type Server struct {
 	followers map[*client.Client]struct{}
 	cache     cache.Cacher
 	logger    *zap.SugaredLogger
+	raft      *raft.Raft
 }
 
 func NewServer(opts ServerOpts, c cache.Cacher) *Server {
 	l, _ := zap.NewProduction()
+
+	config := raft.DefaultConfig()
+	config.LocalID = raft.ServerID(opts.ListenAddr)
+
+	addr, err := net.ResolveTCPAddr("tcp", opts.ListenAddr)
+	if err != nil {
+		log.Fatalf("error occured to resolve tcp address: %+v", err)
+	}
+
+	raftDir := filepath.Join(opts.RaftDir, opts.ListenAddr)
+	if err := os.MkdirAll(raftDir, 0700); err != nil {
+		log.Fatalf("Failed to create Raft folder: %+v", err)
+	}
+
+	logStore, err := raftboltdb.NewBoltStore(filepath.Join(raftDir, "raft-log.bolt"))
+	if err != nil {
+		log.Fatalf("Failed to create new Bolt Store: %+v", err)
+	}
+
+	stableStore, err := raftboltdb.NewBoltStore(filepath.Join(raftDir, "raft-stable.bolt"))
+	if err != nil {
+		log.Fatalf("Failed to create new Bolt Store: %+v", err)
+	}
+
+	snapshotStore, err := raft.NewFileSnapshotStore(raftDir, 2, os.Stderr)
+	if err != nil {
+		log.Fatalf("Failed to create new Snapshot Store: %+v", err)
+	}
+
+	transport, err := raft.NewTCPTransport(opts.ListenAddr, addr, 3, 10*time.Second, os.Stderr)
+	if err != nil {
+		log.Fatalf("Failed to create TCP transport: %+v", err)
+	}
+
+	fsm := &fsm.FSM{
+		Cache: c,
+	}
+
+	raft, err := raft.NewRaft(config, fsm, logStore, stableStore, snapshotStore, transport)
+	if err != nil {
+		log.Fatalf("Failed to create Raft: %+v", err)
+	}
+
 	return &Server{
 		ServerOpts: opts,
 		followers:  make(map[*client.Client]struct{}),
 		cache:      c,
 		logger:     l.Sugar(),
+		raft:       raft,
 	}
 }
 
@@ -43,6 +94,23 @@ func (s *Server) Start() error {
 	ln, err := net.Listen("tcp", s.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("listen error: %v", err)
+	}
+
+	if s.IsLeader {
+		configuration := raft.Configuration{
+			Servers: []raft.Server{
+				{
+					ID:      raft.ServerID(s.ListenAddr),
+					Address: raft.ServerAddress(s.ListenAddr),
+				},
+			},
+		}
+
+		future := s.raft.BootstrapCluster(configuration)
+
+		if future.Error() != nil {
+			log.Fatalf("Failed to Bootstrap Raft CLuster: %+v", err)
+		}
 	}
 
 	if !s.IsLeader && len(s.LeaderAddr) != 0 {
@@ -81,15 +149,11 @@ func (s *Server) dialLeader() error {
 
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
-	// buf := make([]byte, 2048)
-
-	// slog.Info("connection made", "conn", conn.RemoteAddr())
 
 	for {
 		cmd, err := proto.ParseCommand(conn)
 		if err != nil {
 			if err == io.EOF {
-				// slog.Info("Connection Closed", "conn", conn.RemoteAddr())
 				break
 			}
 			log.Println("parse command error")
@@ -112,7 +176,22 @@ func (s *Server) handleMessage(conn net.Conn, msg any) {
 
 func (s *Server) handleJoinCommand(conn net.Conn, cmd *proto.JoinCommand) error {
 	s.logger.Info("member just joined the cluster", conn.RemoteAddr())
-	s.followers[client.NewFromConn(conn)] = struct{}{}
+
+	if s.IsLeader {
+		future := s.raft.AddVoter(raft.ServerID(conn.RemoteAddr().String()), raft.ServerAddress(conn.RemoteAddr().String()), 0, 10*time.Millisecond)
+		if err := future.Error(); err != nil {
+			s.logger.Error("failed to initiate configuration change", "error", err)
+			return err
+		}
+
+		select {
+		case <-s.raft.LeaderCh():
+			s.logger.Info("configuration change applied")
+		case <-time.After(time.Second):
+			s.logger.Error("timeout waiting for the configuration changes")
+			return fmt.Errorf("timeout waiting for the configuration changes")
+		}
+	}
 	return nil
 }
 

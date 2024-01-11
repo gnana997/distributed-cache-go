@@ -17,6 +17,10 @@ func NewCache() *Cache {
 	}
 }
 
+func (c *Cache) GetState() map[string][]byte {
+	return c.data
+}
+
 func (c *Cache) Get(key []byte) ([]byte, error) {
 	c.lock.RLock()
 	defer c.lock.RUnlock()

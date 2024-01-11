@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"gnana997/distributed-cache/client"
 	"log"
-	"net"
 	"os"
 	"time"
 
@@ -28,24 +27,49 @@ func main() {
 
 	cfg.LocalID = "gn"
 
-	ips, err := net.LookupIP("localhost")
-	if err != nil {
-		log.Fatal(err)
-	}
-	if len(ips) == 0 {
-		log.Fatalf("localhost did not resolve to any IPs")
-	}
-	addr := &net.TCPAddr{IP: ips[0], Port: 4000}
+	// ips, err := net.LookupIP("localhost")
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	// if len(ips) == 0 {
+	// 	log.Fatalf("localhost did not resolve to any IPs")
+	// }
+	// addr := &net.TCPAddr{IP: ips[0], Port: 4000}
 
-	tr, err := raft.NewTCPTransport(":4000", addr, 10, timeout, os.Stdout)
+	tr, err := raft.NewTCPTransport("127.0.0.1:4000", nil, 10, timeout, os.Stdout)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	server := raft.Server{
+		Suffrage: raft.Voter,
+		ID:       raft.ServerID(cfg.LocalID),
+		Address:  "127.0.0.1:4000",
+	}
+	server_1 := raft.Server{
+		Suffrage: raft.Voter,
+		ID:       raft.ServerID("997"),
+		Address:  "127.0.0.1:4001",
+	}
+
+	rcfg := raft.Configuration{
+		Servers: []raft.Server{server, server_1},
+	}
+
+	// raft.BootstrapCluster(cfg, logStore, stableStore, snapshoteStore, tr, rcfg)
+
+	// bc := r.BootstrapCluster(rcfg)
+	// fmt.Println(bc)
 
 	r, err := raft.NewRaft(cfg, fsm, logStore, stableStore, snapshoteStore, tr)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	if err := r.BootstrapCluster(rcfg).Error(); err != nil {
+		log.Fatal(err)
+	}
+
 	fmt.Printf("%+v\n", r)
 
 	select {}
