@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/binary"
 	"fmt"
 	"gnana997/distributed-cache/cache"
@@ -14,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -42,12 +42,13 @@ func NewServer(opts ServerOpts, c cache.Cacher) *Server {
 	config := raft.DefaultConfig()
 	config.LocalID = raft.ServerID(opts.ListenAddr)
 
-	addr, err := net.ResolveTCPAddr("tcp", opts.ListenAddr)
-	if err != nil {
-		log.Fatalf("error occured to resolve tcp address: %+v", err)
-	}
+	// addr, err := net.ResolveTCPAddr("tcp", opts.ListenAddr)
+	// fmt.Printf("Addr %+v \n", addr)
+	// if err != nil {
+	// 	log.Fatalf("error occured to resolve tcp address: %+v", err)
+	// }
 
-	raftDir := filepath.Join(opts.RaftDir, opts.ListenAddr)
+	raftDir := filepath.Join(opts.RaftDir)
 	if err := os.MkdirAll(raftDir, 0700); err != nil {
 		log.Fatalf("Failed to create Raft folder: %+v", err)
 	}
@@ -67,7 +68,7 @@ func NewServer(opts ServerOpts, c cache.Cacher) *Server {
 		log.Fatalf("Failed to create new Snapshot Store: %+v", err)
 	}
 
-	transport, err := raft.NewTCPTransport(opts.ListenAddr, addr, 3, 10*time.Second, os.Stderr)
+	transport, err := raft.NewTCPTransport("127.0.0.1"+opts.ListenAddr, nil, 3, 10*time.Second, os.Stderr)
 	if err != nil {
 		log.Fatalf("Failed to create TCP transport: %+v", err)
 	}
@@ -201,13 +202,7 @@ func (s *Server) handleSetCommand(conn net.Conn, cmd *proto.SetCommand) error {
 
 	if s.IsLeader {
 		go func() {
-			for follower := range s.followers {
-				if err := follower.Set(context.TODO(), cmd.Key, cmd.Value, cmd.TTL); err != nil {
-					if err != nil {
-						slog.Error("forward to member error", "err", err)
-					}
-				}
-			}
+			s.replicateSetEntry(cmd)
 		}()
 	}
 
@@ -241,4 +236,46 @@ func (s *Server) handleGetCommand(conn net.Conn, cmd *proto.GetCommand) error {
 	_, err = conn.Write(resp.Bytes())
 
 	return err
+}
+
+func (s *Server) replicateSetEntry(cmd *proto.SetCommand) {
+	if !s.IsLeader {
+		return
+	}
+
+	buf := cmd.Bytes()
+
+	term, index, err := s.getLeaderInfo()
+	if err != nil {
+		s.logger.Errorf("Error Getting Leader Info: %+v", err)
+	}
+
+	logEntry := raft.Log{
+		Type:  raft.LogCommand,
+		Data:  buf,
+		Index: index + 1,
+		Term:  term,
+	}
+
+	future := s.raft.ApplyLog(logEntry, 10*time.Second)
+	if err := future.Error(); err != nil {
+		s.logger.Error("failed to replicate log entry", "err", err)
+	}
+}
+
+func (s *Server) getLeaderInfo() (uint64, uint64, error) {
+
+	stats := s.raft.Stats()
+
+	lastIndex, err := strconv.ParseUint((stats["last_log_index"]), 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	term, err := strconv.ParseUint(stats["term"], 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return term, lastIndex, nil
 }
