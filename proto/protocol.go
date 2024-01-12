@@ -87,7 +87,19 @@ func ParseGetResponse(r io.Reader) (*GetResponse, error) {
 	return resp, nil
 }
 
-type JoinCommand struct{}
+type JoinCommand struct {
+	Addr []byte
+}
+
+func (c *JoinCommand) Bytes() []byte {
+	buf := new(bytes.Buffer)
+	binary.Write(buf, binary.LittleEndian, CMDJoin)
+
+	binary.Write(buf, binary.LittleEndian, int32(len(c.Addr)))
+	binary.Write(buf, binary.LittleEndian, c.Addr)
+
+	return buf.Bytes()
+}
 
 type SetCommand struct {
 	Key   []byte
@@ -125,11 +137,12 @@ func (c *GetCommand) Bytes() []byte {
 }
 
 func ParseCommand(r io.Reader) (any, error) {
-
 	var cmd Command
 	if err := binary.Read(r, binary.LittleEndian, &cmd); err != nil {
 		return nil, err
 	}
+
+	fmt.Println("Recieved command ", cmd)
 
 	switch cmd {
 	case CMDSet:
@@ -137,7 +150,7 @@ func ParseCommand(r io.Reader) (any, error) {
 	case CMDGet:
 		return parseGetCommand(r), nil
 	case CMDJoin:
-		return &JoinCommand{}, nil
+		return parseJoinCommand(r), nil
 	default:
 		return nil, fmt.Errorf("invalid command")
 	}
@@ -172,5 +185,17 @@ func parseGetCommand(r io.Reader) *GetCommand {
 	cmd.Key = make([]byte, keyLen)
 	binary.Read(r, binary.LittleEndian, &cmd.Key)
 
+	return cmd
+}
+
+func parseJoinCommand(r io.Reader) *JoinCommand {
+	cmd := &JoinCommand{}
+
+	var keyLen int32
+	binary.Read(r, binary.LittleEndian, &keyLen)
+	cmd.Addr = make([]byte, keyLen)
+	binary.Read(r, binary.LittleEndian, &cmd.Addr)
+
+	fmt.Printf("recieved cmd : %+v", cmd)
 	return cmd
 }

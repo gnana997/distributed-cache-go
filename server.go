@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"fmt"
 	"gnana997/distributed-cache/cache"
 	"gnana997/distributed-cache/client"
@@ -22,10 +21,11 @@ import (
 )
 
 type ServerOpts struct {
-	ListenAddr string
-	IsLeader   bool
-	LeaderAddr string
-	RaftDir    string
+	RaftListenAddr string
+	ListenAddr     string
+	IsLeader       bool
+	LeaderAddr     string
+	RaftDir        string
 }
 
 type Server struct {
@@ -40,13 +40,13 @@ func NewServer(opts ServerOpts, c cache.Cacher) *Server {
 	l, _ := zap.NewProduction()
 
 	config := raft.DefaultConfig()
-	config.LocalID = raft.ServerID(opts.ListenAddr)
+	config.LocalID = raft.ServerID(opts.RaftListenAddr)
 
-	// addr, err := net.ResolveTCPAddr("tcp", opts.ListenAddr)
-	// fmt.Printf("Addr %+v \n", addr)
-	// if err != nil {
-	// 	log.Fatalf("error occured to resolve tcp address: %+v", err)
-	// }
+	addr, err := net.ResolveTCPAddr("tcp", opts.RaftListenAddr)
+	fmt.Printf("Addr %+v \n", addr)
+	if err != nil {
+		log.Fatalf("error occured to resolve tcp address: %+v", err)
+	}
 
 	raftDir := filepath.Join(opts.RaftDir)
 	if err := os.MkdirAll(raftDir, 0700); err != nil {
@@ -68,7 +68,7 @@ func NewServer(opts ServerOpts, c cache.Cacher) *Server {
 		log.Fatalf("Failed to create new Snapshot Store: %+v", err)
 	}
 
-	transport, err := raft.NewTCPTransport("127.0.0.1"+opts.ListenAddr, nil, 3, 10*time.Second, os.Stderr)
+	transport, err := raft.NewTCPTransport(opts.RaftListenAddr, addr, 3, 10*time.Second, os.Stderr)
 	if err != nil {
 		log.Fatalf("Failed to create TCP transport: %+v", err)
 	}
@@ -92,29 +92,24 @@ func NewServer(opts ServerOpts, c cache.Cacher) *Server {
 }
 
 func (s *Server) Start() error {
-	ln, err := net.Listen("tcp", s.ListenAddr)
-	if err != nil {
-		return fmt.Errorf("listen error: %v", err)
-	}
-
 	if s.IsLeader {
 		configuration := raft.Configuration{
 			Servers: []raft.Server{
 				{
-					ID:      raft.ServerID(s.ListenAddr),
-					Address: raft.ServerAddress(s.ListenAddr),
+					ID:      raft.ServerID(s.RaftListenAddr),
+					Address: raft.ServerAddress(s.RaftListenAddr),
 				},
 			},
 		}
 
 		future := s.raft.BootstrapCluster(configuration)
 
-		if future.Error() != nil {
+		if err := future.Error(); err != nil {
 			log.Fatalf("Failed to Bootstrap Raft CLuster: %+v", err)
 		}
 	}
 
-	if !s.IsLeader && len(s.LeaderAddr) != 0 {
+	if !s.IsLeader {
 		go func() {
 			if err := s.dialLeader(); err != nil {
 				log.Println(err)
@@ -123,6 +118,11 @@ func (s *Server) Start() error {
 	}
 
 	s.logger.Info("server starting", "addr", s.ListenAddr, "leader", s.IsLeader)
+
+	ln, err := net.Listen("tcp", s.ListenAddr)
+	if err != nil {
+		return fmt.Errorf("listen error: %v", err)
+	}
 
 	for {
 		conn, err := ln.Accept()
@@ -141,9 +141,14 @@ func (s *Server) dialLeader() error {
 	}
 	s.logger.Info("connected to leader", "leaderAddr", s.LeaderAddr)
 
-	binary.Write(conn, binary.LittleEndian, proto.CMDJoin)
+	joinCmd := &proto.JoinCommand{
+		Addr: []byte(s.RaftListenAddr),
+	}
 
-	s.handleConn(conn)
+	_, err = conn.Write(joinCmd.Bytes())
+	if err != nil {
+		return fmt.Errorf("write error %+v", err)
+	}
 
 	return nil
 }
@@ -179,7 +184,7 @@ func (s *Server) handleJoinCommand(conn net.Conn, cmd *proto.JoinCommand) error 
 	s.logger.Info("member just joined the cluster", conn.RemoteAddr())
 
 	if s.IsLeader {
-		future := s.raft.AddVoter(raft.ServerID(conn.RemoteAddr().String()), raft.ServerAddress(conn.RemoteAddr().String()), 0, 10*time.Millisecond)
+		future := s.raft.AddVoter(raft.ServerID(conn.RemoteAddr().String()), raft.ServerAddress(cmd.Addr), 0, 100*time.Millisecond)
 		if err := future.Error(); err != nil {
 			s.logger.Error("failed to initiate configuration change", "error", err)
 			return err
@@ -188,7 +193,7 @@ func (s *Server) handleJoinCommand(conn net.Conn, cmd *proto.JoinCommand) error 
 		select {
 		case <-s.raft.LeaderCh():
 			s.logger.Info("configuration change applied")
-		case <-time.After(time.Second):
+		case <-time.After(time.Second * 2):
 			s.logger.Error("timeout waiting for the configuration changes")
 			return fmt.Errorf("timeout waiting for the configuration changes")
 		}
@@ -253,8 +258,12 @@ func (s *Server) replicateSetEntry(cmd *proto.SetCommand) {
 	logEntry := raft.Log{
 		Type:  raft.LogCommand,
 		Data:  buf,
-		Index: index + 1,
+		Index: 0,
 		Term:  term,
+	}
+
+	if index != 0 {
+		logEntry.Index = index + 1
 	}
 
 	future := s.raft.ApplyLog(logEntry, 10*time.Second)
